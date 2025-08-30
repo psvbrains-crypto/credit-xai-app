@@ -1,110 +1,163 @@
-# streamlit_xai_credit.py
-
+# MIT-Ready Explainable AI Credit Scoring App
 import streamlit as st
 import pandas as pd
 import numpy as np
 import shap
 import matplotlib.pyplot as plt
+import plotly.express as px
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import classification_report, accuracy_score, roc_auc_score
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.metrics import accuracy_score, roc_auc_score, classification_report
+from fairlearn.metrics import demographic_parity_difference, equalized_odds_difference
+import warnings
 
-# Title and description
-st.title("Explainable AI Credit Scoring Bias Detection Tool")
+warnings.filterwarnings("ignore")
+
+st.title("Advanced Explainable AI & Fairness App for Credit Bias Evaluation")
+
 st.markdown("""
-This app lets you upload your credit scoring dataset to train a model and explore explainability analyses
-with SHAP values. Discover which features influence credit risk predictions to understand and reduce bias.
+Upload a mortgage or credit scoring dataset. This app trains a robust model, quantifies and visualizes bias, and gives feature-level explanations. All metrics, SHAP plots, and fairness diagnostics are included.
 """)
 
-# File uploader
-uploaded_file = st.file_uploader("Upload your credit data CSV file", type=["csv"])
+# Step 1: File upload
+uploaded_file = st.file_uploader("Upload credit data CSV", type=["csv"])
 if uploaded_file:
 
-    # Load data
-    try:
-        data = pd.read_csv(uploaded_file)
-        st.write("Data Sample:")
-        st.dataframe(data.head())
-    except Exception as e:
-        st.error(f"Error loading data: {e}")
-        st.stop()
+    # Step 2: Load & summarize data
+    df = pd.read_csv(uploaded_file)
+    st.write("Data Sample:", df.head())
 
-    # Select target variable
-    target_col = st.selectbox("Select the target (outcome) column", options=data.columns)
-    if target_col is None:
-        st.warning("Please select the target column to proceed.")
-        st.stop()
+    # Step 3: Target and sensitive attribute selection
+    target_col = st.selectbox("Select target (outcome) column", options=df.columns)
+    sensitive_col = st.selectbox("Select sensitive attribute for fairness analysis (e.g. gender/race)", options=[c for c in df.columns if c != target_col])
 
-    # Features/target split
-    X = data.drop(columns=[target_col])
-    y = data[target_col]
+    # Step 4: Feature preparation
+    X = df.drop(columns=[target_col])
+    y = df[target_col]
 
-    # Show type info and missing values
-    st.write("Feature Types:")
-    st.write(X.dtypes)
-    st.write("---")
-    st.write("Missing values count in each feature:")
-    st.write(X.isna().sum())
+    # Identify categorical columns and encode
+    cat_cols = X.select_dtypes(include=['object', 'category']).columns.tolist()
+    num_cols = X.select_dtypes(include=[np.number]).columns.tolist()
 
-    # Fill missing values with median for simplicity
-    X = X.fillna(X.median())
+    # One-hot encoding for categorical features
+    if cat_cols:
+        encoder = OneHotEncoder(drop='first', sparse=False)
+        X_encoded = pd.DataFrame(
+            encoder.fit_transform(X[cat_cols]),
+            columns=encoder.get_feature_names_out(cat_cols)
+        )
+        X_num = X[num_cols].reset_index(drop=True)
+        X_prepared = pd.concat([X_num, X_encoded], axis=1)
+    else:
+        X_prepared = X[num_cols]
 
-    # Some basic data validation
+    # Fill missing for robustness
+    X_prepared.fillna(X_prepared.median(), inplace=True)
+
+    st.write("Processed Feature Sample:", X_prepared.head())
+
+    # Binary target check
     if y.nunique() > 2:
-        st.warning("Target variable has more than two classes; this app currently supports binary classification only.")
+        st.error("Currently supports binary target only. Please select a binary outcome.")
         st.stop()
 
-    # Split data for training and testing
-    test_size = st.slider("Test set size %", 10, 50, 30)
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size / 100, random_state=42)
+    # Split data
+    test_size_pct = st.slider("Test set size (%)", 10, 50, 30)
+    X_train, X_test, y_train, y_test = train_test_split(X_prepared, y, test_size=test_size_pct/100, random_state=42)
 
-    # Train Random Forest Classifier
+    # Step 5: Train classifier
     clf = RandomForestClassifier(n_estimators=200, random_state=42)
     clf.fit(X_train, y_train)
 
-    # Predict and evaluate
+    # Predict and metrics
     y_pred = clf.predict(X_test)
-    y_prob = clf.predict_proba(X_test)[:, 1]
+    y_proba = clf.predict_proba(X_test)[:, 1]
     acc = accuracy_score(y_test, y_pred)
-    auc = roc_auc_score(y_test, y_prob)
-    st.write(f"**Test Set Accuracy:** {acc:.3f}")
-    st.write(f"**Test Set ROC AUC:** {auc:.3f}")
+    auc = roc_auc_score(y_test, y_proba)
+
+    st.markdown(f"**Accuracy:** {acc:.3f}")
+    st.markdown(f"**ROC AUC:** {auc:.3f}")
+
     st.text("Classification Report:")
     st.text(classification_report(y_test, y_pred))
 
-    # Explainability using SHAP
-    st.header("Explainability with SHAP")
+    # Step 6: Fairness metrics
+    sensitive_test = df.loc[X_test.index, sensitive_col].values
+
+    dp_diff = demographic_parity_difference(y_true=y_test, y_pred=y_pred, sensitive_features=sensitive_test)
+    eo_diff = equalized_odds_difference(y_true=y_test, y_pred=y_pred, sensitive_features=sensitive_test)
+
+    st.subheader("Fairness Diagnostics:")
+    st.write(f"**Demographic Parity Difference:** {dp_diff:.4f} (Values close to 0 suggest fairness)")
+    st.write(f"**Equalized Odds Difference:** {eo_diff:.4f} (Values close to 0 suggest fairness)")
+
+    # Step 7: SHAP explanations (global and local)
     explainer = shap.TreeExplainer(clf)
-    shap_values = explainer.shap_values(X_test)
+    shap_vals = explainer.shap_values(X_test)
 
-    st.subheader("Global Feature Importance (SHAP Summary Plot)")
+    st.subheader("Global SHAP Feature Importance")
     plt.figure(figsize=(10, 6))
-    shap.summary_plot(shap_values[1], X_test, show=False)
+    shap.summary_plot(shap_vals[1], X_test, show=False)
     st.pyplot(plt.gcf())
 
-    st.subheader("SHAP Dependence Plot")
-    selected_feature = st.selectbox("Select feature for dependence plot", X.columns)
+    st.subheader("Dependence Plot")
+    feature_for_plot = st.selectbox("Select feature for dependence plot", X_prepared.columns)
     plt.figure(figsize=(8, 5))
-    shap.dependence_plot(selected_feature, shap_values[1], X_test, show=False)
+    shap.dependence_plot(feature_for_plot, shap_vals[1], X_test, show=False)
     st.pyplot(plt.gcf())
 
-    st.subheader("Local Explainability (Force Plot)")
-    select_index = st.slider(f"Select sample index to explain (0 to {len(X_test)-1})", 0, len(X_test) - 1, 0)
-    selected_sample = X_test.iloc[select_index]
-
-    st.write(f"Features of sample #{select_index}:")
-    st.write(selected_sample)
-
-    # Display force plot for the selected instance
+    st.subheader("Local SHAP Explanations")
+    instance_idx = st.slider(f"Test instance to explain (0-{X_test.shape[0]-1})", 0, X_test.shape[0]-1, 0)
     force_plot = shap.force_plot(
         explainer.expected_value[1],
-        shap_values[1][select_index, :],
-        selected_sample,
+        shap_vals[1][instance_idx],
+        X_test.iloc[instance_idx],
         matplotlib=True,
         show=False
     )
     st.pyplot(force_plot)
 
+    # Step 8: Feature-level bias decomposition
+    st.subheader("Feature-level Bias Contribution")
+    group_A = sensitive_test == np.unique(sensitive_test)[0]
+    group_B = ~group_A
+
+    shap_contrib_A = np.mean(shap_vals[1][group_A], axis=0)
+    shap_contrib_B = np.mean(shap_vals[1][group_B], axis=0)
+    bias_contrib = shap_contrib_A - shap_contrib_B
+
+    bias_df = pd.DataFrame({
+        'Feature': X_prepared.columns,
+        'Group_A_Contribution': shap_contrib_A,
+        'Group_B_Contribution': shap_contrib_B,
+        'Bias_Difference': bias_contrib
+    }).sort_values(by='Bias_Difference', ascending=False)
+
+    st.dataframe(bias_df)
+
+    fig = px.bar(
+        bias_df, x='Feature', y='Bias_Difference',
+        title="SHAP Feature-Level Bias Difference (Group A vs Group B)"
+    )
+    st.plotly_chart(fig)
+
+    # Step 9: Adversarial robustness prototype (random noise test)
+    st.subheader("Adversarial Robustness Test")
+    X_noise = X_test.copy()
+    noise_intensity = st.slider("Noise intensity (%)", 0, 50, 10)/100
+    X_noise += np.random.normal(0, noise_intensity, X_noise.shape)
+    y_pred_noise = clf.predict(X_noise)
+    acc_noise = accuracy_score(y_test, y_pred_noise)
+    st.write(f"Accuracy under adversarial noise: {acc_noise:.3f}")
+
+    # Step 10: Multi-stakeholder feedback
+    st.subheader("Annotate Cases for Human Review")
+    feedback_instance = st.slider("Label test instance for review", 0, X_test.shape[0]-1, 0)
+    feedback_note = st.text_input(f"Feedback for instance {feedback_instance}", "")
+    if st.button("Save Feedback"):
+        st.success("Feedback saved (simulated). For real deployments, connect to a backend or database.")
+
 else:
-    st.info("Upload a CSV file to get started.")
+    st.info("Upload a CSV with binary target and at least one sensitive attribute column.")
 
