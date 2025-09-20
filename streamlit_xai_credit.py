@@ -12,7 +12,6 @@ from fairlearn.metrics import demographic_parity_difference, equalized_odds_diff
 import warnings
 
 warnings.filterwarnings("ignore")
-st.set_option('deprecation.showPyplotGlobalUse', False)
 
 st.title("Sophisticated Explainable AI & Fairness Tool for Credit Bias Evaluation")
 
