@@ -4,11 +4,10 @@ import numpy as np
 import shap
 import matplotlib.pyplot as plt
 import plotly.express as px
-import plotly.figure_factory as ff
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, roc_auc_score, classification_report, confusion_matrix, ConfusionMatrixDisplay, calibration_curve
-from sklearn.calibration import CalibratedClassifierCV
+from sklearn.metrics import accuracy_score, roc_auc_score, classification_report, confusion_matrix
+from sklearn.calibration import calibration_curve
 from fairlearn.metrics import demographic_parity_difference, equalized_odds_difference, equal_opportunity_difference, false_positive_rate_difference
 import warnings
 
@@ -24,7 +23,7 @@ Upload a mortgage or credit scoring dataset to train a robust explainable model.
 with st.sidebar:
     st.header("Settings")
     test_size_pct = st.slider("Test set size (%)", 10, 50, 30)
-    noise_intensity = st.slider("Adversarial noise intensity (%)", 0, 50, 10)/100
+    noise_intensity = st.slider("Adversarial noise intensity (%)", 0, 50, 10) / 100
 
 uploaded_file = st.file_uploader("Upload credit data CSV with binary target & sensitive attribute", type=["csv"])
 
@@ -49,7 +48,6 @@ if uploaded_file:
     if y.isnull().any():
         st.warning(f"Warning: Target column '{target_col}' had non-numeric values which were coerced to NaN.")
     y = y.dropna().astype(int)
-
     df = df.loc[y.index]
     y = y.loc[y.index]
 
@@ -80,16 +78,13 @@ if uploaded_file:
         st.error("No data left after removing missing values. Check dataset.")
         st.stop()
 
-    X_train, X_test, y_train, y_test = train_test_split(X_prepared, y, test_size=test_size_pct/100, stratify=y, random_state=42)
+    X_train, X_test, y_train, y_test = train_test_split(X_prepared, y, test_size=test_size_pct / 100, stratify=y, random_state=42)
 
     clf = RandomForestClassifier(n_estimators=200, random_state=42)
     clf.fit(X_train, y_train)
 
-    calibrated_clf = CalibratedClassifierCV(clf, method='sigmoid')
-    calibrated_clf.fit(X_train, y_train)
-
-    y_pred = calibrated_clf.predict(X_test)
-    y_proba = calibrated_clf.predict_proba(X_test)[:,1]
+    y_pred = clf.predict(X_test)
+    y_proba = clf.predict_proba(X_test)[:, 1]
 
     acc = accuracy_score(y_test, y_pred)
     auc = roc_auc_score(y_test, y_proba)
@@ -100,16 +95,21 @@ if uploaded_file:
 
     st.subheader("Confusion Matrix")
     cm = confusion_matrix(y_test, y_pred)
-    disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=calibrated_clf.classes_)
-    disp.plot(cmap=plt.cm.Blues)
-    plt.tight_layout()
-    st.pyplot(plt.gcf())
+    fig, ax = plt.subplots()
+    cax = ax.matshow(cm, cmap=plt.cm.Blues)
+    plt.title('Confusion Matrix')
+    plt.colorbar(cax)
+    ax.set_xticklabels([''] + list(np.unique(y)))
+    ax.set_yticklabels([''] + list(np.unique(y)))
+    plt.xlabel('Predicted')
+    plt.ylabel('True')
+    st.pyplot(fig)
 
     st.subheader("Calibration Curve")
     prob_true, prob_pred = calibration_curve(y_test, y_proba, n_bins=10)
-    fig = px.line(x=prob_pred, y=prob_true, title='Calibration Curve', labels={'x':'Mean predicted probability','y':'Fraction of positives'})
-    fig.add_scatter(x=[0,1], y=[0,1], mode='lines', name='Perfect Calibration', line=dict(dash='dash'))
-    st.plotly_chart(fig)
+    fig2 = px.line(x=prob_pred, y=prob_true, title='Calibration Curve', labels={'x': 'Mean predicted probability', 'y': 'Fraction of positives'})
+    fig2.add_scatter(x=[0, 1], y=[0, 1], mode='lines', name='Perfect calibration', line=dict(dash='dash'))
+    st.plotly_chart(fig2)
 
     sensitive_test = df.loc[X_test.index, sensitive_col].astype(str)
     y_test_int = y_test.astype(int)
@@ -138,19 +138,19 @@ if uploaded_file:
         st.write(f"False Positive Rate Difference: {fpr_diff:.4f}")
 
     st.subheader("SHAP Feature Importance & Explanations")
-    explainer = shap.TreeExplainer(calibrated_clf)
+    explainer = shap.TreeExplainer(clf)
     shap_vals = explainer.shap_values(X_test)
 
-    plt.figure(figsize=(10,6))
+    plt.figure(figsize=(10, 6))
     shap.summary_plot(shap_vals[1], X_test, show=False)
     st.pyplot(plt.gcf())
 
     feature_for_plot = st.selectbox("Feature for SHAP dependence plot", X_prepared.columns)
-    plt.figure(figsize=(8,5))
+    plt.figure(figsize=(8, 5))
     shap.dependence_plot(feature_for_plot, shap_vals[1], X_test, show=False)
     st.pyplot(plt.gcf())
 
-    instance_idx = st.slider("Sample index for local SHAP explanation",0, X_test.shape[0]-1,0)
+    instance_idx = st.slider("Sample index for local SHAP explanation", 0, X_test.shape[0]-1, 0)
     force_plot_mat = shap.force_plot(
         explainer.expected_value[1],
         shap_vals[1][instance_idx],
@@ -167,8 +167,8 @@ if uploaded_file:
     if len(unique_groups) != 2:
         st.warning("Feature-level bias calculation currently requires exactly 2 sensitive groups.")
     else:
-        group_A = group_vals==unique_groups[0]
-        group_B = group_vals==unique_groups[1]
+        group_A = group_vals == unique_groups[0]
+        group_B = group_vals == unique_groups[1]
 
         shap_contrib_A = np.mean(shap_vals[1][group_A], axis=0)
         shap_contrib_B = np.mean(shap_vals[1][group_B], axis=0)
@@ -182,13 +182,13 @@ if uploaded_file:
         }).sort_values(by='Bias Difference', ascending=False)
 
         st.dataframe(bias_df)
-        fig_bias= px.bar(bias_df, x='Feature', y='Bias Difference', title="SHAP Bias Contribution Difference")
+        fig_bias = px.bar(bias_df, x='Feature', y='Bias Difference', title="SHAP Bias Contribution Difference")
         st.plotly_chart(fig_bias)
 
     st.subheader("Adversarial Robustness Test")
     X_noise = X_test.copy()
     X_noise += np.random.normal(0, noise_intensity, X_noise.shape)
-    y_pred_noise = calibrated_clf.predict(X_noise)
+    y_pred_noise = clf.predict(X_noise)
     acc_noise = accuracy_score(y_test, y_pred_noise)
     st.write(f"Accuracy with noise intensity {noise_intensity*100:.1f}%: {acc_noise:.3f}")
 
