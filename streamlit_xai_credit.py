@@ -1,4 +1,4 @@
-# MIT-Ready Explainable AI Credit Scoring App with compatibility fix
+# MIT-Ready Explainable AI Credit Scoring App with Fairlearn fix
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -34,7 +34,7 @@ if uploaded_file:
     X = df.drop(columns=[target_col])
     y = df[target_col]
     
-    # Identify categorical columns and encode using pandas.get_dummies for compatibility
+    # Identify categorical columns and encode using pandas.get_dummies()
     cat_cols = X.select_dtypes(include=['object', 'category']).columns.tolist()
     num_cols = X.select_dtypes(include=[np.number]).columns.tolist()
 
@@ -74,6 +74,12 @@ if uploaded_file:
     
     # Step 6: Fairness metrics
     sensitive_test = df.loc[X_test.index, sensitive_col].values
+
+    # Fix types and formats for Fairlearn
+    y_test = y_test.astype(int)         # Ensure int labels
+    y_pred = y_pred.astype(int)
+    sensitive_test = pd.Series(sensitive_test).astype(str).values  # Force string categorical
+
     dp_diff = demographic_parity_difference(y_true=y_test, y_pred=y_pred, sensitive_features=sensitive_test)
     eo_diff = equalized_odds_difference(y_true=y_test, y_pred=y_pred, sensitive_features=sensitive_test)
     st.subheader("Fairness Diagnostics:")
