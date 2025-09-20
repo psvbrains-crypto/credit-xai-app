@@ -1,8 +1,8 @@
 streamlit
-shap
+scikit-learn
 pandas
 numpy
-scikit-learn
 matplotlib
-fairlearn
 plotly
+shap
+fairlearn
